@@ -87,13 +87,18 @@ function commandOf(message) {
     return low.split(/\s+/)[0].split("@")[0];
   }
 
-  if (low.includes("логово")) return "/sethome";
+  if (low.includes("штаб")) return "/sethome";
   if (low.includes("точка")) return "/point";
+  if (low.includes("сигнал")) return "/point";
   if (low.includes("маршрут")) return "/route";
+  if (low.includes("выход")) return "/route";
   if (low.includes("профиль")) return "/profile";
+  if (low.includes("досье")) return "/profile";
   if (low.includes("история")) return "/history";
+  if (low.includes("архив")) return "/history";
   if (low.includes("радиус")) return "/radius";
   if (low.includes("меню")) return "/menu";
+  if (low.includes("терминал")) return "/menu";
   if (low.includes("архив")) return "/report";
 
   return "";
@@ -107,19 +112,19 @@ function mainKeyboard() {
   return {
     keyboard: [
       [
-        { text: "🜏 Сохранить логово", request_location: true }
+        { text: "⌂ Установить штаб", request_location: true }
       ],
       [
-        { text: "🜃 Точка" },
-        { text: "🜁 Маршрут" }
+        { text: "◌ Сигнал" },
+        { text: "⟡ Выход" }
       ],
       [
-        { text: "☾ Профиль" },
-        { text: "† История" }
+        { text: "☾ Досье" },
+        { text: "‡ Архив" }
       ],
       [
-        { text: "⛧ Радиус" },
-        { text: "? Меню" }
+        { text: "⛯ Радиус" },
+        { text: "? Терминал" }
       ]
     ],
     resize_keyboard: true,
@@ -258,23 +263,23 @@ function hasHome(p) {
 
 function menuText() {
   return "<b>WanderOS</b>\n" +
-    "<i>город отвечает, если идти не туда</i>\n\n" +
-    "🜏 <b>Логово</b> — сохранить стартовую точку\n" +
-    "🜃 <b>Точка</b> — метка рядом с логовом\n" +
+    "<i>аномалия проявляется, когда маршрут выбран верно</i>\n\n" +
+    "🜏 <b>Штаб</b> — сохранить стартовую точку\n" +
+    "🜃 <b>Точка</b> — метка рядом с штабм\n" +
     "🜁 <b>Маршрут</b> — путь до метки\n" +
-    "☾ <b>Профиль</b> — радиус и логово\n" +
+    "☾ <b>Профиль</b> — радиус и штаб\n" +
     "† <b>История</b> — последние следы\n\n" +
-    "Сначала нажми <b>🜏 Сохранить логово</b>.";
+    "Сначала нажми <b>⌂ Установить штаб</b>.";
 }
 
 function needHomeText() {
-  return "<b>Логово не задано.</b>\n\n" +
-    "Нажми 🜏 <b>Сохранить логово</b> и отправь точку на карте.";
+  return "<b>Штаб не задано.</b>\n\n" +
+    "Нажми 🜏 <b>Сохранить штаб</b> и отправь точку на карте.";
 }
 
 function homeSavedText(origin, target, route) {
-  return "<b>Логово принято.</b>\n\n" +
-    "Теперь город будет сгибаться вокруг этой точки.\n\n" +
+  return "<b>Штаб принято.</b>\n\n" +
+    "Теперь операции будут рассчитываться от этой точки.\n\n" +
     "Первая метка: <code>" + target.lat + ", " + target.lon + "</code>\n" +
     "<a href=\"" + urlHtml(route) + "\">Открыть путь</a>";
 }
@@ -285,30 +290,30 @@ function profileText(p, count) {
     ? "<code>" + p.base_lat + ", " + p.base_lon + "</code>\n" + safeHtml(p.base_label || "метка")
     : "не задано";
 
-  return "<b>☾ Профиль</b>\n\n" +
+  return "<b>☾ Досье</b>\n\n" +
     "Имя: " + name + "\n" +
     "Город: " + safeHtml(p.city || "Москва") + "\n" +
     "Радиус: <b>" + p.radius_m + " м</b>\n" +
-    "Логово: " + base + "\n" +
+    "Штаб: " + base + "\n" +
     "Следов: <b>" + count + "</b>";
 }
 
 function pointText(target, route, title, omen) {
-  return "<b>🜃 " + safeHtml(title) + "</b>\n\n" +
+  return "<b>◌ Сигнал: " + safeHtml(title) + "</b>\n\n" +
     "Метка: <code>" + target.lat + ", " + target.lon + "</code>\n" +
     "<a href=\"" + urlHtml(route) + "\">Открыть путь</a>\n\n" +
     "<i>" + safeHtml(omen) + "</i>";
 }
 
 function routeText(target, route, title, omen) {
-  return "<b>🜁 Путь: " + safeHtml(title) + "</b>\n\n" +
+  return "<b>⟡ Выход: " + safeHtml(title) + "</b>\n\n" +
     "Цель: <code>" + target.lat + ", " + target.lon + "</code>\n" +
     "<a href=\"" + urlHtml(route) + "\">Идти</a>\n\n" +
     "<i>" + safeHtml(omen) + "</i>";
 }
 
 function radiusHelpText() {
-  return "<b>⛧ Радиус</b>\n\n" +
+  return "<b>⛯ Радиус</b>\n\n" +
     "Напиши так:\n" +
     "<code>/radius 800</code>\n\n" +
     "Предел: 200–5000 м.";
@@ -327,10 +332,10 @@ function parseRadius(text) {
 
 function historyText(rows) {
   if (!rows.length) {
-    return "<b>† История пуста.</b>\n\nПока город тебя не запомнил.";
+    return "<b>‡ Архив пуста.</b>\n\nАрхив пуст. Выходов ещё не было.";
   }
 
-  let out = "<b>† Последние следы</b>\n\n";
+  let out = "<b>‡ Архив выходов</b>\n\n";
 
   rows.forEach((r, i) => {
     out += "<b>" + (i + 1) + ". " + safeHtml(r.title || "метка") + "</b>\n";
@@ -343,10 +348,10 @@ function historyText(rows) {
 
 function reportText(p, count) {
   return "<b>Архив WanderOS</b>\n\n" +
-    "Логово: " + (hasHome(p) ? "есть" : "нет") + "\n" +
+    "Штаб: " + (hasHome(p) ? "есть" : "нет") + "\n" +
     "Радиус: " + p.radius_m + " м\n" +
     "Следов в базе: " + count + "\n\n" +
-    "<i>город помнит достаточно</i>";
+    "<i>архив содержит рабочие следы</i>";
 }
 
 function demoText() {
@@ -476,7 +481,7 @@ async function handleTelegram(request, env) {
       WHERE chat_id = ?
     `).bind(now(), chatId).run();
 
-    await send(env, chatId, "<b>Логово стёрто.</b>\n\nГород снова пуст.");
+    await send(env, chatId, "<b>Штаб стёрто.</b>\n\nПривязка штаба сброшена.");
     return new Response("ok", { status: 200 });
   }
 
@@ -532,3 +537,4 @@ export default {
     return handleTelegram(request, env);
   }
 };
+
