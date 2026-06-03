@@ -1,0 +1,12 @@
+﻿[project]
+name = "wanderos"
+version = "0.1.0"
+description = "Telegram bot for safe urban routes and quests in Moscow"
+authors = [
+    { name = "Облов Андрей Андреевич" }
+]
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
