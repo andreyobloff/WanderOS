@@ -1,19 +1,50 @@
 ﻿const DEFAULT_CENTER = { lat: 55.7558, lon: 37.6173 };
-const DEFAULT_RADIUS = 1500;
+const DEFAULT_RADIUS = 1200;
 const MIN_RADIUS = 200;
 const MAX_RADIUS = 5000;
-const HISTORY_LIMIT = 10;
 
-function nowIso() {
+const TITLES = [
+  "слепой двор",
+  "ржавая арка",
+  "фонарь без свидетелей",
+  "порог между домами",
+  "тихий карман города",
+  "место, где карта врёт",
+  "пустой угол",
+  "эхо переулка"
+];
+
+const OMENS = [
+  "найди знак, который смотрит не туда",
+  "досчитай до семи окон и сверни взгляд",
+  "заметь предмет, который будто забыли специально",
+  "не фотографируй первым — сначала посмотри",
+  "ищи отражение: стекло, вода, витрина",
+  "остановись там, где шум внезапно провалится"
+];
+
+function now() {
   return new Date().toISOString();
 }
 
-function profileKey(chatId) {
-  return "profile:" + chatId;
+function id() {
+  return crypto.randomUUID();
 }
 
-function historyKey(chatId) {
-  return "history:" + chatId;
+function pick(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function safeHtml(v) {
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function urlHtml(v) {
+  return String(v).replaceAll("&", "&amp;");
 }
 
 function cleanPoint(lat, lon) {
@@ -50,372 +81,320 @@ function routeUrl(a, b) {
 
 function commandOf(message) {
   const text = message && message.text ? message.text.trim() : "";
-  if (!text) return "";
-  return text.split(/\s+/)[0].split("@")[0].toLowerCase();
+  const low = text.toLowerCase();
+
+  if (low.startsWith("/")) {
+    return low.split(/\s+/)[0].split("@")[0];
+  }
+
+  if (low.includes("логово")) return "/sethome";
+  if (low.includes("точка")) return "/point";
+  if (low.includes("маршрут")) return "/route";
+  if (low.includes("профиль")) return "/profile";
+  if (low.includes("история")) return "/history";
+  if (low.includes("радиус")) return "/radius";
+  if (low.includes("меню")) return "/menu";
+  if (low.includes("архив")) return "/report";
+
+  return "";
 }
 
 function textOf(message) {
   return message && message.text ? message.text.trim() : "";
 }
 
-function htmlSafe(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function disclaimer() {
-  return "Важно: WanderOS предлагает идею прогулки, а не гарантированно безопасный маршрут. Не заходите на частные, закрытые, промышленные и опасные территории.";
-}
-
-function defaultProfile(chatId, message) {
-  const from = message.from || {};
-  return {
-    chat_id: String(chatId),
-    telegram: {
-      username: from.username || null,
-      first_name: from.first_name || null
-    },
-    base_location: null,
-    settings: {
-      city: "Москва",
-      radius_m: DEFAULT_RADIUS
-    },
-    created_at: nowIso(),
-    updated_at: nowIso()
-  };
-}
-
-async function getProfile(env, chatId, message) {
-  if (!env.WANDEROS_KV) {
-    return defaultProfile(chatId, message);
-  }
-
-  const raw = await env.WANDEROS_KV.get(profileKey(chatId));
-  let profile = null;
-
-  if (raw) {
-    try {
-      profile = JSON.parse(raw);
-    } catch {
-      profile = null;
-    }
-  }
-
-  if (!profile) {
-    profile = defaultProfile(chatId, message);
-  }
-
-  if (!profile.settings) profile.settings = {};
-  if (!profile.settings.city) profile.settings.city = "Москва";
-  if (!profile.settings.radius_m) profile.settings.radius_m = DEFAULT_RADIUS;
-
-  return profile;
-}
-
-async function saveProfile(env, chatId, profile) {
-  if (!env.WANDEROS_KV) return;
-  profile.updated_at = nowIso();
-  await env.WANDEROS_KV.put(profileKey(chatId), JSON.stringify(profile));
-}
-
-async function getHistory(env, chatId) {
-  if (!env.WANDEROS_KV) return [];
-
-  const raw = await env.WANDEROS_KV.get(historyKey(chatId));
-  if (!raw) return [];
-
-  try {
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
-}
-
-async function addHistory(env, chatId, item) {
-  if (!env.WANDEROS_KV) return;
-
-  const history = await getHistory(env, chatId);
-  history.unshift(item);
-
-  await env.WANDEROS_KV.put(
-    historyKey(chatId),
-    JSON.stringify(history.slice(0, HISTORY_LIMIT))
-  );
-}
-
-function hasHome(profile) {
-  return profile &&
-    profile.base_location &&
-    typeof profile.base_location.lat === "number" &&
-    typeof profile.base_location.lon === "number";
-}
-
-function locationKeyboard() {
+function mainKeyboard() {
   return {
     keyboard: [
       [
-        {
-          text: "Сохранить базовую точку",
-          request_location: true
-        }
+        { text: "🜏 Сохранить логово", request_location: true }
       ],
       [
-        { text: "/profile" },
-        { text: "/help" }
+        { text: "🜃 Точка" },
+        { text: "🜁 Маршрут" }
+      ],
+      [
+        { text: "☾ Профиль" },
+        { text: "† История" }
+      ],
+      [
+        { text: "⛧ Радиус" },
+        { text: "? Меню" }
       ]
     ],
     resize_keyboard: true,
-    one_time_keyboard: true
+    is_persistent: true
   };
 }
 
-function removeKeyboard() {
-  return {
-    remove_keyboard: true
-  };
-}
-
-async function sendMessage(env, chatId, text, replyMarkup) {
-  const url = "https://api.telegram.org/bot" + env.TELEGRAM_BOT_TOKEN + "/sendMessage";
+async function send(env, chatId, text, keyboard = mainKeyboard()) {
+  const api = "https://api.telegram.org/bot" + env.TELEGRAM_BOT_TOKEN + "/sendMessage";
 
   const payload = {
     chat_id: chatId,
     text,
     parse_mode: "HTML",
-    disable_web_page_preview: true
+    disable_web_page_preview: true,
+    reply_markup: keyboard
   };
 
-  if (replyMarkup) {
-    payload.reply_markup = replyMarkup;
-  }
-
-  const res = await fetch(url, {
+  const res = await fetch(api, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
 
   if (!res.ok) {
-    console.error("Telegram sendMessage failed", res.status, await res.text());
+    console.error("sendMessage failed", res.status, await res.text());
   }
 }
 
-function startText() {
-  return "<b>WanderOS</b>\n\n" +
-    "Теперь бот работает от сохранённой базовой точки пользователя.\n\n" +
-    "<b>Как пользоваться:</b>\n" +
-    "1. /sethome — сохранить стартовую точку.\n" +
-    "2. /point — получить точку рядом с сохранённой базой.\n" +
-    "3. /route — построить пеший маршрут.\n\n" +
-    "<b>Команды:</b>\n" +
-    "/sethome - сохранить базовую точку\n" +
-    "/profile - профиль\n" +
-    "/radius 800 - изменить радиус\n" +
-    "/point - точка рядом с базой\n" +
-    "/route - маршрут от базы\n" +
-    "/history - история\n" +
-    "/report - отчёт\n" +
-    "/clearhome - удалить базу\n" +
-    "/demo - демо вокруг центра Москвы\n\n" +
-    disclaimer();
+async function upsertUser(env, message) {
+  const chatId = String(message.chat.id);
+  const from = message.from || {};
+  const t = now();
+
+  await env.DB.prepare(`
+    INSERT INTO users(chat_id, username, first_name, language_code, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chat_id) DO UPDATE SET
+      username = excluded.username,
+      first_name = excluded.first_name,
+      language_code = excluded.language_code,
+      updated_at = excluded.updated_at
+  `).bind(
+    chatId,
+    from.username || null,
+    from.first_name || null,
+    from.language_code || null,
+    t,
+    t
+  ).run();
+
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO profiles(chat_id, city, radius_m, mood, created_at, updated_at)
+    VALUES (?, 'Москва', ?, 'liminal', ?, ?)
+  `).bind(chatId, DEFAULT_RADIUS, t, t).run();
+
+  return chatId;
 }
 
-function helpText() {
-  return "<b>Справка WanderOS</b>\n\n" +
-    "/sethome - отправить геолокацию и сохранить её в профиль\n" +
-    "/profile - показать сохранённую точку и радиус\n" +
-    "/radius 800 - изменить радиус генерации, от 200 до 5000 м\n" +
-    "/point - случайная точка рядом с сохранённой базой\n" +
-    "/route - пеший маршрут от базы до новой точки\n" +
-    "/history - последние маршруты\n" +
-    "/report - учебный отчёт\n" +
-    "/clearhome - удалить базовую точку\n\n" +
-    "Можно отправить не текущую позицию, а выбранную точку на карте: дом, вуз, работа или удобное место старта.";
+async function profile(env, chatId) {
+  return await env.DB.prepare(`
+    SELECT u.chat_id, u.username, u.first_name,
+           p.city, p.base_lat, p.base_lon, p.base_label,
+           p.radius_m, p.mood, p.updated_at
+    FROM users u
+    JOIN profiles p ON p.chat_id = u.chat_id
+    WHERE u.chat_id = ?
+  `).bind(chatId).first();
 }
 
-function setHomeText() {
-  return "<b>Сохранение базовой точки</b>\n\n" +
-    "Нажмите кнопку «Сохранить базовую точку» и отправьте геолокацию.\n\n" +
-    "После этого /point и /route будут работать относительно сохранённого адреса, а не от центра Москвы.";
+async function updateHome(env, chatId, lat, lon, label) {
+  const p = cleanPoint(lat, lon);
+
+  await env.DB.prepare(`
+    UPDATE profiles
+    SET base_lat = ?, base_lon = ?, base_label = ?, updated_at = ?
+    WHERE chat_id = ?
+  `).bind(p.lat, p.lon, label || "метка на карте", now(), chatId).run();
+
+  return p;
+}
+
+async function updateRadius(env, chatId, radius) {
+  await env.DB.prepare(`
+    UPDATE profiles
+    SET radius_m = ?, updated_at = ?
+    WHERE chat_id = ?
+  `).bind(radius, now(), chatId).run();
+}
+
+async function addRoute(env, chatId, kind, origin, target, radius, title, omen) {
+  const map = pointUrl(target);
+  const route = routeUrl(origin, target);
+
+  await env.DB.prepare(`
+    INSERT INTO routes(
+      id, chat_id, kind,
+      origin_lat, origin_lon,
+      target_lat, target_lon,
+      radius_m, title, omen,
+      map_url, route_url, created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    id(), chatId, kind,
+    origin.lat, origin.lon,
+    target.lat, target.lon,
+    radius, title, omen,
+    map, route, now()
+  ).run();
+
+  return { map, route };
+}
+
+async function history(env, chatId) {
+  const result = await env.DB.prepare(`
+    SELECT kind, target_lat, target_lon, title, omen, route_url, created_at
+    FROM routes
+    WHERE chat_id = ?
+    ORDER BY created_at DESC
+    LIMIT 5
+  `).bind(chatId).all();
+
+  return result.results || [];
+}
+
+async function stats(env, chatId) {
+  return await env.DB.prepare(`
+    SELECT COUNT(*) AS total FROM routes WHERE chat_id = ?
+  `).bind(chatId).first();
+}
+
+function hasHome(p) {
+  return p && typeof p.base_lat === "number" && typeof p.base_lon === "number";
+}
+
+function menuText() {
+  return "<b>WanderOS</b>\n" +
+    "<i>город отвечает, если идти не туда</i>\n\n" +
+    "🜏 <b>Логово</b> — сохранить стартовую точку\n" +
+    "🜃 <b>Точка</b> — метка рядом с логовом\n" +
+    "🜁 <b>Маршрут</b> — путь до метки\n" +
+    "☾ <b>Профиль</b> — радиус и логово\n" +
+    "† <b>История</b> — последние следы\n\n" +
+    "Сначала нажми <b>🜏 Сохранить логово</b>.";
 }
 
 function needHomeText() {
-  return "<b>Базовая точка ещё не сохранена.</b>\n\n" +
-    "Сначала используйте /sethome и отправьте геолокацию. После этого бот будет строить точки рядом с вашим выбранным адресом.";
+  return "<b>Логово не задано.</b>\n\n" +
+    "Нажми 🜏 <b>Сохранить логово</b> и отправь точку на карте.";
 }
 
-function profileText(profile, historyCount) {
-  let base = "не задана";
+function homeSavedText(origin, target, route) {
+  return "<b>Логово принято.</b>\n\n" +
+    "Теперь город будет сгибаться вокруг этой точки.\n\n" +
+    "Первая метка: <code>" + target.lat + ", " + target.lon + "</code>\n" +
+    "<a href=\"" + urlHtml(route) + "\">Открыть путь</a>";
+}
 
-  if (hasHome(profile)) {
-    base = profile.base_location.lat + ", " + profile.base_location.lon +
-      "\nОбновлена: " + htmlSafe(profile.base_location.updated_at || "неизвестно");
-  }
+function profileText(p, count) {
+  const name = p.username ? "@" + safeHtml(p.username) : safeHtml(p.first_name || "странник");
+  const base = hasHome(p)
+    ? "<code>" + p.base_lat + ", " + p.base_lon + "</code>\n" + safeHtml(p.base_label || "метка")
+    : "не задано";
 
-  const username = profile.telegram && profile.telegram.username
-    ? "@" + htmlSafe(profile.telegram.username)
-    : "не указан";
+  return "<b>☾ Профиль</b>\n\n" +
+    "Имя: " + name + "\n" +
+    "Город: " + safeHtml(p.city || "Москва") + "\n" +
+    "Радиус: <b>" + p.radius_m + " м</b>\n" +
+    "Логово: " + base + "\n" +
+    "Следов: <b>" + count + "</b>";
+}
 
-  return "<b>Профиль WanderOS</b>\n\n" +
-    "<b>Telegram:</b> " + username + "\n" +
-    "<b>Город:</b> " + htmlSafe(profile.settings.city || "Москва") + "\n" +
-    "<b>Радиус:</b> " + profile.settings.radius_m + " м\n" +
-    "<b>Базовая точка:</b> " + base + "\n" +
-    "<b>Записей в истории:</b> " + historyCount + "\n\n" +
-    "Изменить базовую точку: /sethome\n" +
-    "Изменить радиус: /radius 1000";
+function pointText(target, route, title, omen) {
+  return "<b>🜃 " + safeHtml(title) + "</b>\n\n" +
+    "Метка: <code>" + target.lat + ", " + target.lon + "</code>\n" +
+    "<a href=\"" + urlHtml(route) + "\">Открыть путь</a>\n\n" +
+    "<i>" + safeHtml(omen) + "</i>";
+}
+
+function routeText(target, route, title, omen) {
+  return "<b>🜁 Путь: " + safeHtml(title) + "</b>\n\n" +
+    "Цель: <code>" + target.lat + ", " + target.lon + "</code>\n" +
+    "<a href=\"" + urlHtml(route) + "\">Идти</a>\n\n" +
+    "<i>" + safeHtml(omen) + "</i>";
 }
 
 function radiusHelpText() {
-  return "<b>Настройка радиуса</b>\n\n" +
-    "Формат:\n" +
+  return "<b>⛧ Радиус</b>\n\n" +
+    "Напиши так:\n" +
     "<code>/radius 800</code>\n\n" +
-    "Диапазон: " + MIN_RADIUS + "-" + MAX_RADIUS + " м.";
-}
-
-function savedRadiusText(radius) {
-  return "<b>Радиус сохранён.</b>\n\n" +
-    "Новый радиус: " + radius + " м.";
-}
-
-function pointText(origin, target, radius) {
-  return "<b>Точка WanderOS</b>\n\n" +
-    "<b>База:</b> сохранённая точка профиля\n" +
-    "<b>Цель:</b> " + target.lat + ", " + target.lon + "\n" +
-    "<b>Радиус:</b> " + radius + " м\n" +
-    "<b>Карта:</b> " + pointUrl(target) + "\n" +
-    "<b>Пеший маршрут:</b> " + routeUrl(origin, target) + "\n\n" +
-    "<b>Задание:</b>\n" +
-    "1. Проверьте маршрут на карте.\n" +
-    "2. Не заходите на закрытые или опасные территории.\n" +
-    "3. Найдите рядом необычную городскую деталь.\n\n" +
-    disclaimer();
-}
-
-function routeText(origin, target, radius) {
-  return "<b>Маршрут WanderOS</b>\n\n" +
-    "<b>Старт:</b> сохранённая базовая точка\n" +
-    "<b>Цель:</b> " + target.lat + ", " + target.lon + "\n" +
-    "<b>Радиус:</b> " + radius + " м\n" +
-    "<b>Пеший маршрут:</b> " + routeUrl(origin, target) + "\n\n" +
-    disclaimer();
-}
-
-function homeSavedText(origin, target, radius) {
-  return "<b>Базовая точка сохранена.</b>\n\n" +
-    "<b>База:</b> " + origin.lat + ", " + origin.lon + "\n" +
-    "<b>Радиус:</b> " + radius + " м\n\n" +
-    "Теперь /point и /route работают относительно этой точки.\n\n" +
-    "<b>Первая демо-точка:</b> " + target.lat + ", " + target.lon + "\n" +
-    "<b>Маршрут:</b> " + routeUrl(origin, target) + "\n\n" +
-    disclaimer();
-}
-
-function demoText() {
-  const target = randomPoint(DEFAULT_CENTER, DEFAULT_RADIUS);
-
-  return "<b>Демо-точка</b>\n\n" +
-    "Это демо вокруг центра Москвы. Для нормальной работы используйте /sethome.\n\n" +
-    "<b>Координаты:</b> " + target.lat + ", " + target.lon + "\n" +
-    "<b>Карта:</b> " + pointUrl(target);
-}
-
-function historyText(history) {
-  if (!history || history.length === 0) {
-    return "<b>История пуста.</b>\n\n" +
-      "Сначала используйте /sethome, затем /point или /route.";
-  }
-
-  let text = "<b>История WanderOS</b>\n\n";
-
-  history.slice(0, 5).forEach((item, index) => {
-    text += "<b>" + (index + 1) + ".</b> " + htmlSafe(item.type) + "\n" +
-      "Дата: " + htmlSafe(item.created_at) + "\n" +
-      "Цель: " + item.target.lat + ", " + item.target.lon + "\n" +
-      "Маршрут: " + routeUrl(item.origin, item.target) + "\n\n";
-  });
-
-  return text.trim();
-}
-
-function reportText(profile, history) {
-  return "<b>Отчёт WanderOS</b>\n\n" +
-    "<b>Архитектура:</b> Telegram Webhook + Cloudflare Workers + Workers KV\n" +
-    "<b>ПК:</b> не требуется\n" +
-    "<b>VPS:</b> не используется\n" +
-    "<b>Базовая точка:</b> " + (hasHome(profile) ? "сохранена" : "не сохранена") + "\n" +
-    "<b>Радиус:</b> " + profile.settings.radius_m + " м\n" +
-    "<b>История:</b> " + history.length + " записей\n\n" +
-    "Бот хранит профиль пользователя и строит точки относительно сохранённого адреса.";
+    "Предел: 200–5000 м.";
 }
 
 function parseRadius(text) {
-  const parts = text.split(/\s+/);
-  if (parts.length < 2) return null;
+  const m = text.match(/\/radius\s+(\d+)/i);
+  if (!m) return null;
 
-  const value = Number.parseInt(parts[1], 10);
+  const value = Number.parseInt(m[1], 10);
   if (!Number.isFinite(value)) return null;
   if (value < MIN_RADIUS || value > MAX_RADIUS) return null;
 
   return value;
 }
 
-async function handleLocation(env, chatId, message) {
-  const profile = await getProfile(env, chatId, message);
-  const origin = cleanPoint(message.location.latitude, message.location.longitude);
-  const radius = profile.settings.radius_m || DEFAULT_RADIUS;
-  const target = randomPoint(origin, radius);
+function historyText(rows) {
+  if (!rows.length) {
+    return "<b>† История пуста.</b>\n\nПока город тебя не запомнил.";
+  }
 
-  profile.base_location = {
-    lat: origin.lat,
-    lon: origin.lon,
-    source: "telegram_location",
-    updated_at: nowIso()
-  };
+  let out = "<b>† Последние следы</b>\n\n";
 
-  await saveProfile(env, chatId, profile);
-
-  await addHistory(env, chatId, {
-    type: "home_saved",
-    origin,
-    target,
-    radius_m: radius,
-    created_at: nowIso()
+  rows.forEach((r, i) => {
+    out += "<b>" + (i + 1) + ". " + safeHtml(r.title || "метка") + "</b>\n";
+    out += "<code>" + r.target_lat + ", " + r.target_lon + "</code>\n";
+    out += "<a href=\"" + urlHtml(r.route_url) + "\">путь</a>\n\n";
   });
 
-  await sendMessage(env, chatId, homeSavedText(origin, target, radius), removeKeyboard());
+  return out.trim();
 }
 
-async function generate(env, chatId, message, mode) {
-  const profile = await getProfile(env, chatId, message);
+function reportText(p, count) {
+  return "<b>Архив WanderOS</b>\n\n" +
+    "Логово: " + (hasHome(p) ? "есть" : "нет") + "\n" +
+    "Радиус: " + p.radius_m + " м\n" +
+    "Следов в базе: " + count + "\n\n" +
+    "<i>город помнит достаточно</i>";
+}
 
-  if (!hasHome(profile)) {
-    await sendMessage(env, chatId, needHomeText(), locationKeyboard());
+function demoText() {
+  const target = randomPoint(DEFAULT_CENTER, DEFAULT_RADIUS);
+  return "<b>Демо-метка</b>\n\n" +
+    "<code>" + target.lat + ", " + target.lon + "</code>\n" +
+    "<a href=\"" + urlHtml(pointUrl(target)) + "\">открыть карту</a>";
+}
+
+async function handleLocation(env, chatId, message) {
+  let label = "метка на карте";
+
+  if (message.venue) {
+    label = [message.venue.title, message.venue.address].filter(Boolean).join(" — ");
+  }
+
+  const loc = message.location || message.venue?.location;
+  const origin = await updateHome(env, chatId, loc.latitude, loc.longitude, label);
+
+  const p = await profile(env, chatId);
+  const radius = p.radius_m || DEFAULT_RADIUS;
+  const target = randomPoint(origin, radius);
+  const title = pick(TITLES);
+  const omen = pick(OMENS);
+  const saved = await addRoute(env, chatId, "home", origin, target, radius, title, omen);
+
+  await send(env, chatId, homeSavedText(origin, target, saved.route));
+}
+
+async function makePoint(env, chatId, kind) {
+  const p = await profile(env, chatId);
+
+  if (!hasHome(p)) {
+    await send(env, chatId, needHomeText());
     return;
   }
 
-  const origin = cleanPoint(profile.base_location.lat, profile.base_location.lon);
-  const radius = profile.settings.radius_m || DEFAULT_RADIUS;
+  const origin = cleanPoint(p.base_lat, p.base_lon);
+  const radius = p.radius_m || DEFAULT_RADIUS;
   const target = randomPoint(origin, radius);
+  const title = pick(TITLES);
+  const omen = pick(OMENS);
+  const saved = await addRoute(env, chatId, kind, origin, target, radius, title, omen);
 
-  await addHistory(env, chatId, {
-    type: mode,
-    origin,
-    target,
-    radius_m: radius,
-    created_at: nowIso()
-  });
-
-  if (mode === "route") {
-    await sendMessage(env, chatId, routeText(origin, target, radius), removeKeyboard());
+  if (kind === "route") {
+    await send(env, chatId, routeText(target, saved.route, title, omen));
   } else {
-    await sendMessage(env, chatId, pointText(origin, target, radius), removeKeyboard());
+    await send(env, chatId, pointText(target, saved.route, title, omen));
   }
 }
 
@@ -427,92 +406,86 @@ async function handleTelegram(request, env) {
     return new Response("ignored", { status: 200 });
   }
 
-  const chatId = message.chat.id;
+  const chatId = await upsertUser(env, message);
 
-  if (message.location) {
+  if (message.location || message.venue) {
     await handleLocation(env, chatId, message);
     return new Response("ok", { status: 200 });
   }
 
-  const command = commandOf(message);
+  const cmd = commandOf(message);
   const text = textOf(message);
 
-  if (command === "/start") {
-    await sendMessage(env, chatId, startText());
+  if (cmd === "/start" || cmd === "/menu" || cmd === "/help") {
+    await send(env, chatId, menuText());
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/help") {
-    await sendMessage(env, chatId, helpText());
+  if (cmd === "/sethome" || cmd === "/home" || cmd === "/location") {
+    await send(env, chatId, "Отправь точку. Можно текущую, можно выбранную на карте.");
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/sethome" || command === "/location" || command === "/home") {
-    await sendMessage(env, chatId, setHomeText(), locationKeyboard());
+  if (cmd === "/profile") {
+    const p = await profile(env, chatId);
+    const s = await stats(env, chatId);
+    await send(env, chatId, profileText(p, s.total || 0));
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/profile") {
-    const profile = await getProfile(env, chatId, message);
-    const history = await getHistory(env, chatId);
-    await sendMessage(env, chatId, profileText(profile, history.length));
-    return new Response("ok", { status: 200 });
-  }
+  if (cmd === "/radius") {
+    const r = parseRadius(text);
 
-  if (command === "/radius") {
-    const radius = parseRadius(text);
-
-    if (!radius) {
-      await sendMessage(env, chatId, radiusHelpText());
+    if (!r) {
+      await send(env, chatId, radiusHelpText());
       return new Response("ok", { status: 200 });
     }
 
-    const profile = await getProfile(env, chatId, message);
-    profile.settings.radius_m = radius;
-    await saveProfile(env, chatId, profile);
-
-    await sendMessage(env, chatId, savedRadiusText(radius));
+    await updateRadius(env, chatId, r);
+    await send(env, chatId, "<b>Радиус изменён.</b>\n\nТеперь круг: <b>" + r + " м</b>.");
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/point" || command === "/near") {
-    await generate(env, chatId, message, "point");
+  if (cmd === "/point") {
+    await makePoint(env, chatId, "point");
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/route") {
-    await generate(env, chatId, message, "route");
+  if (cmd === "/route") {
+    await makePoint(env, chatId, "route");
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/history") {
-    const history = await getHistory(env, chatId);
-    await sendMessage(env, chatId, historyText(history));
+  if (cmd === "/history") {
+    const rows = await history(env, chatId);
+    await send(env, chatId, historyText(rows));
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/report") {
-    const profile = await getProfile(env, chatId, message);
-    const history = await getHistory(env, chatId);
-    await sendMessage(env, chatId, reportText(profile, history));
+  if (cmd === "/report") {
+    const p = await profile(env, chatId);
+    const s = await stats(env, chatId);
+    await send(env, chatId, reportText(p, s.total || 0));
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/clearhome") {
-    const profile = await getProfile(env, chatId, message);
-    profile.base_location = null;
-    await saveProfile(env, chatId, profile);
+  if (cmd === "/clearhome") {
+    await env.DB.prepare(`
+      UPDATE profiles
+      SET base_lat = NULL, base_lon = NULL, base_label = NULL, updated_at = ?
+      WHERE chat_id = ?
+    `).bind(now(), chatId).run();
 
-    await sendMessage(env, chatId, "<b>Базовая точка удалена.</b>\n\nЧтобы сохранить новую, используйте /sethome.", removeKeyboard());
+    await send(env, chatId, "<b>Логово стёрто.</b>\n\nГород снова пуст.");
     return new Response("ok", { status: 200 });
   }
 
-  if (command === "/demo") {
-    await sendMessage(env, chatId, demoText());
+  if (cmd === "/demo") {
+    await send(env, chatId, demoText());
     return new Response("ok", { status: 200 });
   }
 
-  await sendMessage(env, chatId, "Команды:\n/start\n/help\n/sethome\n/profile\n/radius 800\n/point\n/route\n/history\n/report\n/clearhome");
+  await send(env, chatId, menuText());
   return new Response("ok", { status: 200 });
 }
 
@@ -521,18 +494,22 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/") {
+      let db = "missing";
+
+      try {
+        if (env.DB) {
+          await env.DB.prepare("SELECT 1 AS ok").first();
+          db = "D1 ready";
+        }
+      } catch {
+        db = "D1 error";
+      }
+
       return Response.json({
         service: "WanderOS",
         status: "ok",
         runtime: "Cloudflare Workers",
-        storage: env.WANDEROS_KV ? "Workers KV connected" : "Workers KV missing",
-        features: [
-          "telegram-webhook",
-          "user-profile",
-          "saved-base-location",
-          "radius-settings",
-          "history"
-        ]
+        database: db
       });
     }
 
@@ -545,10 +522,13 @@ export default {
     }
 
     if (!env.TELEGRAM_BOT_TOKEN) {
-      return new Response("missing TELEGRAM_BOT_TOKEN", { status: 500 });
+      return new Response("missing token", { status: 500 });
+    }
+
+    if (!env.DB) {
+      return new Response("missing D1 binding DB", { status: 500 });
     }
 
     return handleTelegram(request, env);
   }
 };
-

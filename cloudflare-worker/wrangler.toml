@@ -6,3 +6,8 @@ workers_dev = true
 [[kv_namespaces]]
 binding = "WANDEROS_KV"
 id = "1d3da0c5a37848bcb23e8cbcd881153e"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wanderos-db"
+database_id = "4d2c56da-c834-4fce-b79c-72aed9c969ca"
