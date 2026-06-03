@@ -97,17 +97,21 @@ async function sendMessage(env, chatId, text) {
       disable_web_page_preview: true
     })
   });
+
   if (!response.ok) {
-    console.error("Telegram sendMessage failed", response.status, await response.text());
+    const errorText = await response.text();
+    console.error("Telegram sendMessage failed", response.status, errorText);
   }
 }
 
 async function handleTelegramUpdate(request, env) {
   const update = await request.json();
   const message = update.message || update.edited_message;
+
   if (!message || !message.chat || !message.chat.id) {
     return new Response("ignored", { status: 200 });
   }
+
   const reply = buildReply(message);
   await sendMessage(env, message.chat.id, reply);
   return new Response("ok", { status: 200 });
@@ -116,19 +120,23 @@ async function handleTelegramUpdate(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
     if (url.pathname === "/") {
       return Response.json({ service: "WanderOS", status: "ok", runtime: "Cloudflare Workers" });
     }
-    if (!env.TELEGRAM_BOT_TOKEN || !env.WEBHOOK_SECRET) {
-      return new Response("missing secrets", { status: 500 });
-    }
-    const expectedPath = "/webhook/" + env.WEBHOOK_SECRET;
-    if (url.pathname !== expectedPath) {
+
+    if (url.pathname !== "/webhook") {
       return new Response("not found", { status: 404 });
     }
+
     if (request.method !== "POST") {
       return new Response("method not allowed", { status: 405 });
     }
+
+    if (!env.TELEGRAM_BOT_TOKEN) {
+      return new Response("missing TELEGRAM_BOT_TOKEN", { status: 500 });
+    }
+
     return handleTelegramUpdate(request, env);
   }
 };

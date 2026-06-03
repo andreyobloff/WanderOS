@@ -5,20 +5,13 @@ Write-Host ""
 Write-Host "=== WanderOS Cloudflare Webhook Setup ===" -ForegroundColor Cyan
 
 $Token = Read-Host "TELEGRAM_BOT_TOKEN"
-$Secret = Read-Host "WEBHOOK_SECRET"
-$WorkerUrl = Read-Host "Worker URL, например https://wanderos-bot.username.workers.dev"
+$WorkerUrl = Read-Host "Worker URL, например https://wanderos-bot.wanderos.workers.dev"
 
 $Token = $Token.Trim()
-$Secret = $Secret.Trim()
 $WorkerUrl = $WorkerUrl.Trim().TrimEnd("/")
 
 if ([string]::IsNullOrWhiteSpace($Token)) {
     Write-Host "Токен пустой." -ForegroundColor Red
-    exit 1
-}
-
-if ([string]::IsNullOrWhiteSpace($Secret)) {
-    Write-Host "WEBHOOK_SECRET пустой." -ForegroundColor Red
     exit 1
 }
 
@@ -27,12 +20,13 @@ if ([string]::IsNullOrWhiteSpace($WorkerUrl)) {
     exit 1
 }
 
-$WebhookUrl = "$WorkerUrl/webhook/$Secret"
+$WebhookUrl = "$WorkerUrl/webhook"
+
 Write-Host "Устанавливаю webhook:" -ForegroundColor Cyan
 Write-Host $WebhookUrl -ForegroundColor Yellow
 
 $ApiUrl = "https://api.telegram.org/bot$Token/setWebhook"
-$Response = Invoke-RestMethod -Uri $ApiUrl -Method Post -Body @{ url = $WebhookUrl }
+$Response = Invoke-RestMethod -Uri $ApiUrl -Method Post -Body @{ url = $WebhookUrl; drop_pending_updates = "true" }
 
 if ($Response.ok -eq $true) {
     Write-Host "Webhook установлен успешно." -ForegroundColor Green
