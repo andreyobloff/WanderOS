@@ -9,7 +9,7 @@ from wanderos.report_service import build_user_report
 logger = logging.getLogger(__name__)
 
 
-def run_bot() -> None:
+def create_bot() -> telebot.TeleBot:
     if not settings.telegram_bot_token:
         logger.error("TELEGRAM_BOT_TOKEN не задан. Создайте .env на основе .env.example.")
         raise RuntimeError("TELEGRAM_BOT_TOKEN is missing")
@@ -79,5 +79,19 @@ def run_bot() -> None:
     def handle_report(message):
         bot.reply_to(message, build_user_report())
 
-    logger.info("WanderOS bot started")
+    @bot.message_handler(func=lambda message: True)
+    def handle_unknown(message):
+        text = (
+            "Я пока понимаю только команды.\n\n"
+            "Попробуйте: /start, /help, /profile, /point, /report"
+        )
+        bot.reply_to(message, text)
+
+    return bot
+
+
+def run_bot() -> None:
+    bot = create_bot()
+    bot.remove_webhook()
+    logger.info("WanderOS bot started in polling mode")
     bot.infinity_polling(skip_pending=True)
