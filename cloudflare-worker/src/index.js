@@ -111,7 +111,7 @@ function mainKeyboard() {
   return {
     keyboard: [
       [
-        { text: "⌂ Установить штаб", request_location: true }
+        { text: "⌂ Штаб" }
       ],
       [
         { text: "◌ Сигнал" },
@@ -404,7 +404,7 @@ function hasHome(p) {
 function menuText() {
   return "<b>WanderOS</b>\n" +
     "<i>аномалия проявляется, когда маршрут выбран верно</i>\n\n" +
-    "⌂ <b>Штаб</b> — базовая точка операций\n" +
+    "⌂ <b>Штаб</b> — база операций\n" +
     "◌ <b>Сигнал</b> — метка рядом со штабом\n" +
     "⟡ <b>Выход</b> — путь до сигнала\n" +
     "☾ <b>Досье</b> — профиль оператора\n" +
@@ -413,12 +413,12 @@ function menuText() {
 
 function needHomeText() {
   return "<b>Штаб не установлен.</b>\n\n" +
-    "Нажми ⌂ <b>Установить штаб</b> и отправь точку на карте.";
+    "Открой ⌂ <b>Штаб</b> и прикрепи любую точку через геолокацию.";
 }
 
 function setHomeText() {
   return "<b>Установка штаба</b>\n\n" +
-    "Отправь точку на карте. Можно текущую позицию, дом, вуз или другую базу операций.";
+    "Прикрепи геолокацию через вложение Telegram. Подойдёт текущая позиция, выбранная точка на карте, дом, вуз или другая база операций.";
 }
 
 function homeSavedText(target, route) {
@@ -515,6 +515,13 @@ async function handleLocation(env, ctx, chatId, message, cleanupIds) {
   }
 
   const loc = message.location || message.venue?.location;
+
+  if (!loc || typeof loc.latitude !== "number" || typeof loc.longitude !== "number") {
+    await logEvent(env, chatId, "location_missing", {});
+    await sendScreen(env, ctx, chatId, "<b>Штаб не принят.</b>\n\nПрикрепи точку через геолокацию Telegram.", cleanupIds);
+    return;
+  }
+
   const origin = await updateHome(env, chatId, loc.latitude, loc.longitude, label);
 
   const p = await profile(env, chatId);
@@ -704,3 +711,4 @@ export default {
     return handleTelegram(request, env, ctx);
   }
 };
+
