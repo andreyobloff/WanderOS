@@ -25,6 +25,7 @@ function dist(a,b){const R=6371000,la=a.lat*Math.PI/180,lb=b.lat*Math.PI/180,dx=
 function randomPoint(c,r){const a=Math.random()*Math.PI*2,d=Math.sqrt(Math.random())*r,E=6371000;return point(c.lat+(d*Math.cos(a)/E)*180/Math.PI,c.lon+(d*Math.sin(a)/(E*Math.cos(c.lat*Math.PI/180)))*180/Math.PI);}
 const mapUrl = p => "https://www.google.com/maps?q="+p.lat+","+p.lon;
 const routeUrl = (a,b) => "https://www.google.com/maps/dir/?api=1&origin="+a.lat+","+a.lon+"&destination="+b.lat+","+b.lon+"&travelmode=walking";
+const eff = s => `${Number(s?.rating || 0) >= 0 ? "+" : ""}${Number(s?.rating || 0)} (${Number(s?.plus || 0)}+/ ${Number(s?.minus || 0)}-)`;
 
 function commandOf(m){
   const t = msgText(m), low = t.toLowerCase();
@@ -37,6 +38,7 @@ function commandOf(m){
   if (low.includes("радиус")) return "/radius";
   if (low.includes("оперативники")) return "/operators";
   if (low.includes("кооперация")) return "/coops";
+  if (low.includes("эффективность")) return "/profile";
   if (low.includes("терминал") || low.includes("меню")) return "/menu";
   return "";
 }
@@ -77,6 +79,11 @@ async function sendScreen(env,ctx,chatId,text,cleanup=[],opt={}){
     ctx.waitUntil((async()=>{for(const mid of [...new Set(cleanup.concat(old||[]).filter(Boolean).map(Number))]) await delMsg(env,chatId,mid); await prune(env,chatId,id);})());
   }
 }
+
+async function ensureReviews(env){try{await env.DB.prepare(`CREATE TABLE IF NOT EXISTS operator_reviews (reviewer_chat_id TEXT NOT NULL, target_chat_id TEXT NOT NULL, vote INTEGER NOT NULL CHECK(vote IN (-1, 1)), created_at TEXT NOT NULL, PRIMARY KEY(reviewer_chat_id, target_chat_id))`).run();await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_operator_reviews_target ON operator_reviews(target_chat_id)`).run();}catch(e){console.error("ensureReviews",String(e));}}
+async function reviewStats(env,target){await ensureReviews(env);const r=await env.DB.prepare(`SELECT COALESCE(SUM(vote),0) rating, COUNT(*) total, SUM(CASE WHEN vote=1 THEN 1 ELSE 0 END) plus, SUM(CASE WHEN vote=-1 THEN 1 ELSE 0 END) minus FROM operator_reviews WHERE target_chat_id=?`).bind(String(target)).first();return {rating:Number(r?.rating||0),total:Number(r?.total||0),plus:Number(r?.plus||0),minus:Number(r?.minus||0)};}
+async function myReview(env,reviewer,target){await ensureReviews(env);return await env.DB.prepare(`SELECT vote FROM operator_reviews WHERE reviewer_chat_id=? AND target_chat_id=?`).bind(String(reviewer),String(target)).first();}
+async function setReview(env,reviewer,target,vote){await ensureReviews(env);await env.DB.prepare(`INSERT INTO operator_reviews(reviewer_chat_id,target_chat_id,vote,created_at) VALUES(?,?,?,?)`).bind(String(reviewer),String(target),Number(vote),now()).run();}
 
 async function flowSet(env,chatId,mode,payload={}){await env.DB.prepare(`INSERT INTO flow_state(chat_id,mode,payload_json,updated_at) VALUES(?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET mode=excluded.mode,payload_json=excluded.payload_json,updated_at=excluded.updated_at`).bind(String(chatId),mode,JSON.stringify(payload),now()).run();}
 async function flowGet(env,chatId){const r=await env.DB.prepare(`SELECT mode,payload_json FROM flow_state WHERE chat_id=?`).bind(String(chatId)).first();if(!r)return{mode:null,payload:{}};let p={};try{p=r.payload_json?JSON.parse(r.payload_json):{};}catch{}return{mode:r.mode,payload:p};}
@@ -141,12 +148,12 @@ function homePrompt(){return `<b>⌂ Установка штаба</b>\n\nОтп
 function needHome(){return `<b>Штаб не установлен.</b>\n\nОткрой ⌂ <b>Штаб</b> и задай базу операций.`;}
 function needReg(){return `<b>Досье не оформлено.</b>\n\nДля кооперации нужна регистрация в бюро.`;}
 function homeSaved(origin,target,route,label){return `<b>⌂ Штаб установлен.</b>\n\nБаза: <code>${origin.lat}, ${origin.lon}</code>\nМетка: ${esc(label||"штаб")}\n\nПервичный сигнал: <code>${target.lat}, ${target.lon}</code>\n<a href="${urlEsc(route)}">Открыть путь</a>`;}
-function profileText(p,tc,cc){if(!registered(p))return `<b>☾ Досье оператора</b>\n\nСтатус: не оформлено.\n\nКоманда: <code>/register</code>`;const name=p.username?"@"+esc(p.username):esc(p.first_name||"нет");const base=hasHome(p)?`<code>${p.base_lat}, ${p.base_lon}</code>\n${esc(p.base_label||"штаб")}`:"не установлен";return `<b>☾ Досье оператора</b>\n\nПозывной: <b>${esc(p.callsign)}</b>\nПользователь: ${name}\nВозраст: ${p.age}\nПол: ${esc(p.sex)}\nРадиус: <b>${p.radius_m} м</b>\nШтаб: ${base}\nСледы: <b>${tc}</b>\nКооперации: <b>${cc}</b>\n\n${esc(p.bio)}`;}
+function profileText(p,tc,cc,rs){if(!registered(p))return `<b>☾ Досье оператора</b>\n\nСтатус: не оформлено.\n\nКоманда: <code>/register</code>`;const name=p.username?"@"+esc(p.username):esc(p.first_name||"нет");const base=hasHome(p)?`<code>${p.base_lat}, ${p.base_lon}</code>\n${esc(p.base_label||"штаб")}`:"не установлен";return `<b>☾ Досье оператора</b>\n\nПозывной: <b>${esc(p.callsign)}</b>\nПользователь: ${name}\nВозраст: ${p.age}\nПол: ${esc(p.sex)}\nЭффективность: <b>${eff(rs)}</b>\nРадиус: <b>${p.radius_m} м</b>\nШтаб: ${base}\nСледы: <b>${tc}</b>\nКооперации: <b>${cc}</b>\n\n${esc(p.bio)}`;}
 function routeMsg(kind,t,route,title,omen,id){const head=kind==="route"?`⟡ Выход: ${esc(title)}`:`◌ Сигнал: ${esc(title)}`;const link=kind==="route"?"Идти":"Открыть путь";return `<b>${head}</b>\n\n${kind==="route"?"Цель":"Метка"}: <code>${t.lat}, ${t.lon}</code>\n<a href="${urlEsc(route)}">${link}</a>\n\n<i>${esc(omen)}</i>\n\nСлед: <code>${id.slice(0,8)}</code>`;}
 function radiusPrompt(){return `<b>⛯ Радиус поиска</b>\n\nНапиши число от 200 до 5000.\n\n<code>800</code>`;}
 function parseRadius(text){const m=text.match(/(\d+)/); if(!m)return null; const r=Number.parseInt(m[1],10); return Number.isFinite(r)&&r>=MIN_RADIUS&&r<=MAX_RADIUS?r:null;}
-function opsText(items,page,radius){if(!items.length)return `<b>⊕ Оперативники</b>\n\nВ радиусе ${radius} м никого не найдено.`;let out="<b>⊕ Оперативники рядом</b>\n\n";items.forEach((x,i)=>out+=`<b>${i+1}.</b> ${esc(x.callsign)} · ${x.age} · ${x.distance_m} м\n`);return out+`\nСтраница: ${page+1}`;}
-function opText(op,d,tc,cc){const u=op.username?"@"+esc(op.username):esc(op.first_name||"нет");return `<b>☾ Досье: ${esc(op.callsign)}</b>\n\nПользователь: ${u}\nВозраст: ${op.age}\nДистанция: ${d} м\nСледы: <b>${tc}</b>\nКооперации: <b>${cc}</b>\n\n${esc(op.bio)}`;}
+function opsText(items,page,radius){if(!items.length)return `<b>⊕ Оперативники</b>\n\nВ радиусе ${radius} м никого не найдено.`;let out="<b>⊕ Оперативники рядом</b>\n<i>по возрастанию дистанции</i>\n\n";items.forEach((x,i)=>out+=`<b>${i+1}.</b> ${esc(x.callsign)} · ${x.age} · ${x.distance_m} м · ${eff(x.review)}\n`);return out+`\nСтраница: ${page+1}`;}
+function opText(op,d,tc,cc,rs,my){const u=op.username?"@"+esc(op.username):esc(op.first_name||"нет");const voted=my?`\nТвой отзыв: <b>${my.vote>0?"+":"-"}</b>`:"";return `<b>☾ Досье: ${esc(op.callsign)}</b>\n\nПользователь: ${u}\nВозраст: ${op.age}\nДистанция: ${d} м\nЭффективность: <b>${eff(rs)}</b>${voted}\nСледы: <b>${tc}</b>\nКооперации: <b>${cc}</b>\n\n${esc(op.bio)}`;}
 function historyText(rows,page,owner){if(!rows.length)return `<b>‡ Архив пуст.</b>\n\nСледов ещё нет.`;let out="<b>‡ Архив следов</b>\n"; if(owner)out+=`<i>${esc(owner)}</i>\n`; out+="\n"; rows.forEach((r,i)=>out+=`<b>${i+1}. ${esc(r.title||"сигнал")}</b>\n<code>${r.target_lat}, ${r.target_lon}</code>\n\n`);return (out+`Страница: ${page+1}`).trim();}
 function traceText(t,c,idx,count,owner){let out=`<b>‡ След: ${esc(t.title||"сигнал")}</b>\n\nОператор: ${esc(owner||"неизвестно")}\nЦель: <code>${t.target_lat}, ${t.target_lon}</code>\n<a href="${urlEsc(t.route_url)}">путь</a>\n\n`;out+=c?.summary?`<b>Сводка:</b>\n${esc(c.summary)}\n\n`:`<i>Сводка не заполнена.</i>\n\n`;if(count>0)out+=`Медиа: ${idx+1}/${count}`;return out.trim();}
 function coopsText(rows){if(!rows.length)return `<b>⚭ Кооперация</b>\n\nАктивных записей нет.`;let out="<b>⚭ Кооперация</b>\n\n"; rows.forEach((r,i)=>out+=`<b>${i+1}.</b> ${esc(r.name||"оператор")} · ${esc(r.status)}\n`); return out.trim();}
@@ -173,9 +180,9 @@ async function makeRoute(env,ctx,chatId,kind,cleanup){
   await sendScreen(env,ctx,chatId,routeMsg(kind,target,route.route,title,omen,route.id),cleanup,{inline:ik([[{text:"✎ Сводка",callback_data:"tn:"+route.id},{text:"＋ Медиа",callback_data:"tm:"+route.id}],[{text:"‡ Открыть след",callback_data:"tr:"+route.id+":0"}],[{text:"⌂ Терминал",callback_data:"menu"}]])});
 }
 async function showProfile(env,ctx,chatId,cleanup=[]){
-  const p=await profile(env,chatId), tc=await countRoutes(env,chatId), cc=await countCoops(env,chatId);
+  const p=await profile(env,chatId), tc=await countRoutes(env,chatId), cc=await countCoops(env,chatId), rs=await reviewStats(env,chatId);
   const buttons=registered(p)?ik([[{text:"‡ Мои следы",callback_data:"trs:"+chatId+":0"}]]):ik([[{text:"Оформить досье",callback_data:"reg:start"}]]);
-  await sendScreen(env,ctx,chatId,profileText(p,tc,cc),cleanup,{photo:p?.photo_file_id||null,inline:buttons});
+  await sendScreen(env,ctx,chatId,profileText(p,tc,cc,rs),cleanup,{photo:p?.photo_file_id||null,inline:buttons});
 }
 async function startReg(env,ctx,chatId,cleanup=[]){await flowSet(env,chatId,"reg_callsign",{});await sendScreen(env,ctx,chatId,"<b>Регистрация в бюро</b>\n\nУкажи позывной.",cleanup);}
 async function finishReg(env,ctx,chatId,payload,photo,cleanup){
@@ -205,7 +212,9 @@ async function nearby(env,chatId,page){
   const self=await profile(env,chatId); if(!registered(self))return{error:"reg",items:[],radius:0,total:0}; if(!hasHome(self))return{error:"home",items:[],radius:0,total:0};
   const origin=point(self.base_lat,self.base_lon), radius=self.radius_m||DEFAULT_RADIUS;
   const q=await env.DB.prepare(`SELECT op.chat_id,op.callsign,op.age,op.bio,op.photo_file_id,u.username,u.first_name,p.base_lat,p.base_lon FROM operator_profiles op JOIN users u ON u.chat_id=op.chat_id JOIN profiles p ON p.chat_id=op.chat_id WHERE op.is_visible=1 AND op.chat_id<>? AND p.base_lat IS NOT NULL AND p.base_lon IS NOT NULL LIMIT 500`).bind(String(chatId)).all();
-  const all=(q.results||[]).map(x=>({...x,distance_m:dist(origin,point(x.base_lat,x.base_lon))})).filter(x=>x.distance_m<=radius).sort((a,b)=>a.distance_m-b.distance_m);
+  const all=[];
+  for(const x of (q.results||[])){const dm=dist(origin,point(x.base_lat,x.base_lon)); if(dm<=radius) all.push({...x,distance_m:dm,review:await reviewStats(env,x.chat_id)});}
+  all.sort((a,b)=>a.distance_m-b.distance_m);
   return {items:all.slice(page*PAGE,page*PAGE+PAGE),total:all.length,radius};
 }
 async function showOps(env,ctx,chatId,page,cleanup=[]){
@@ -218,8 +227,18 @@ async function showOps(env,ctx,chatId,page,cleanup=[]){
 }
 async function showOp(env,ctx,viewer,target,page,cleanup=[]){
   const v=await profile(env,viewer), op=await operator(env,target); if(!op||!hasHome(v)||typeof op.base_lat!=="number"){await showOps(env,ctx,viewer,page,cleanup);return;}
-  const d=dist(point(v.base_lat,v.base_lon),point(op.base_lat,op.base_lon)), tc=await countRoutes(env,target), cc=await countCoops(env,target);
-  await sendScreen(env,ctx,viewer,opText(op,d,tc,cc),cleanup,{photo:op.photo_file_id||null,inline:ik([[{text:"⚭ Запросить кооперацию",callback_data:"coop:"+target}],[{text:"‡ Следы",callback_data:"trs:"+target+":0"}],[{text:"◀ К списку",callback_data:"ops:"+page}]])});
+  const d=dist(point(v.base_lat,v.base_lon),point(op.base_lat,op.base_lon)), tc=await countRoutes(env,target), cc=await countCoops(env,target), rs=await reviewStats(env,target), mine=await myReview(env,viewer,target);
+  await sendScreen(env,ctx,viewer,opText(op,d,tc,cc,rs,mine),cleanup,{photo:op.photo_file_id||null,inline:ik([[{text:"＋ эффективность",callback_data:"rv:"+target+":1"},{text:"− эффективность",callback_data:"rv:"+target+":-1"}],[{text:"⚭ Запросить кооперацию",callback_data:"coop:"+target}],[{text:"‡ Следы",callback_data:"trs:"+target+":0"}],[{text:"◀ К списку",callback_data:"ops:"+page}]])});
+}
+async function reviewOperator(env,ctx,reviewer,target,vote){
+  const me=await profile(env,reviewer), op=await operator(env,target);
+  if(String(reviewer)===String(target)){await sendScreen(env,ctx,reviewer,"<b>Отзыв отклонён.</b>\n\nНельзя оценивать собственную эффективность.");return;}
+  if(!registered(me)||!op){await sendScreen(env,ctx,reviewer,needReg());return;}
+  const ex=await myReview(env,reviewer,target);
+  if(ex){await sendScreen(env,ctx,reviewer,`<b>Отзыв уже учтён.</b>\n\nОдин оператор может оценить другого только один раз.\nТвой знак: <b>${ex.vote>0?"+":"-"}</b>`);return;}
+  await setReview(env,reviewer,target,Number(vote)>0?1:-1);
+  const rs=await reviewStats(env,target);
+  await sendScreen(env,ctx,reviewer,`<b>Эффективность обновлена.</b>\n\nОператор: <b>${esc(op.callsign)}</b>\nТекущий рейтинг: <b>${eff(rs)}</b>`,[],{inline:ik([[{text:"☾ Открыть досье",callback_data:"op:"+target+":0"}],[{text:"⌂ Терминал",callback_data:"menu"}]])});
 }
 async function coopRequest(env,ctx,from,to,cleanup=[]){
   const a=await profile(env,from), b=await operator(env,to); if(!registered(a)||!b){await sendScreen(env,ctx,from,needReg(),cleanup);return;}
@@ -292,7 +311,7 @@ async function handleMessage(request,env,ctx){
   if(cmd==="/point"){await flowClear(env,chatId); await makeRoute(env,ctx,chatId,"point",cleanup); return new Response("ok",{status:200});}
   if(cmd==="/route"){await flowClear(env,chatId); await makeRoute(env,ctx,chatId,"route",cleanup); return new Response("ok",{status:200});}
   if(cmd==="/history"){await flowClear(env,chatId); await showTraceList(env,ctx,chatId,chatId,0,cleanup); return new Response("ok",{status:200});}
-  if(cmd==="/report"){const p=await profile(env,chatId), c=await countRoutes(env,chatId); await sendScreen(env,ctx,chatId,`<b>Архив WanderOS</b>\n\nШтаб: ${hasHome(p)?"установлен":"нет"}\nРадиус: ${p.radius_m} м\nСледов в базе: ${c}\n\n<i>архив содержит рабочие следы</i>`,cleanup); return new Response("ok",{status:200});}
+  if(cmd==="/report"){const p=await profile(env,chatId), c=await countRoutes(env,chatId), rs=await reviewStats(env,chatId); await sendScreen(env,ctx,chatId,`<b>Архив WanderOS</b>\n\nШтаб: ${hasHome(p)?"установлен":"нет"}\nРадиус: ${p.radius_m} м\nСледов в базе: ${c}\nЭффективность: ${eff(rs)}\n\n<i>архив содержит рабочие следы</i>`,cleanup); return new Response("ok",{status:200});}
   if(cmd==="/clearhome"){await flowClear(env,chatId); await env.DB.prepare(`UPDATE profiles SET base_lat=NULL,base_lon=NULL,base_label=NULL,updated_at=? WHERE chat_id=?`).bind(now(),String(chatId)).run(); await sendScreen(env,ctx,chatId,"<b>Штаб сброшен.</b>\n\nПривязка удалена.",cleanup); return new Response("ok",{status:200});}
   if(cmd==="/radius"){const r=parseRadius(text); if(!r){await flowSet(env,chatId,"await_radius",{}); await sendScreen(env,ctx,chatId,radiusPrompt(),cleanup); return new Response("ok",{status:200});} await setRadius(env,chatId,r); await flowClear(env,chatId); await sendScreen(env,ctx,chatId,`<b>Радиус изменён.</b>\n\nКруг поиска: <b>${r} м</b>.`,cleanup); return new Response("ok",{status:200});}
 
@@ -307,6 +326,7 @@ async function handleCallback(cb,env,ctx){
   if(data==="reg:start"){await startReg(env,ctx,chatId,[]); return new Response("ok",{status:200});}
   if(data.startsWith("ops:")){await showOps(env,ctx,chatId,Number(data.split(":")[1]||0)); return new Response("ok",{status:200});}
   if(data.startsWith("op:")){const p=data.split(":"); await showOp(env,ctx,chatId,p[1],Number(p[2]||0)); return new Response("ok",{status:200});}
+  if(data.startsWith("rv:")){const p=data.split(":"); await reviewOperator(env,ctx,chatId,p[1],Number(p[2]||0)); return new Response("ok",{status:200});}
   if(data.startsWith("coop:")){await coopRequest(env,ctx,chatId,data.split(":")[1]); return new Response("ok",{status:200});}
   if(data.startsWith("ca:")){await answerCoop(env,ctx,chatId,data.split(":")[1],"accepted"); return new Response("ok",{status:200});}
   if(data.startsWith("cd:")){await answerCoop(env,ctx,chatId,data.split(":")[1],"declined"); return new Response("ok",{status:200});}
@@ -323,7 +343,7 @@ export default {
     if (url.pathname === "/") {
       let database = "missing";
       try { if (env.DB) { await env.DB.prepare("SELECT 1 AS ok").first(); database = "D1 ready"; } } catch { database = "D1 error"; }
-      return Response.json({service:"WanderOS",status:"ok",runtime:"Cloudflare Workers",database,modules:["operator-registration","nearby-operators","cooperation","trace-cards","trace-media"]});
+      return Response.json({service:"WanderOS",status:"ok",runtime:"Cloudflare Workers",database,modules:["operator-registration","nearby-operators","cooperation","operator-efficiency","trace-cards","trace-media"]});
     }
     if (url.pathname !== "/webhook") return new Response("not found", { status: 404 });
     if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
