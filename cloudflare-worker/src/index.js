@@ -54,6 +54,15 @@ function cleanPoint(lat, lon) {
   };
 }
 
+function isValidPoint(lat, lon) {
+  return Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lon >= -180 &&
+    lon <= 180;
+}
+
 function randomPoint(center, radiusM) {
   const angle = Math.random() * Math.PI * 2;
   const distance = Math.sqrt(Math.random()) * radiusM;
@@ -248,6 +257,36 @@ async function clearActiveMessage(env, chatId) {
   `).bind(String(chatId), now()).run();
 }
 
+async function setMode(env, chatId, mode) {
+  await env.DB.prepare(`
+    INSERT INTO user_state(chat_id, mode, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(chat_id) DO UPDATE SET
+      mode = excluded.mode,
+      updated_at = excluded.updated_at
+  `).bind(String(chatId), mode, now()).run();
+}
+
+async function getMode(env, chatId) {
+  const row = await env.DB.prepare(`
+    SELECT mode
+    FROM user_state
+    WHERE chat_id = ?
+  `).bind(String(chatId)).first();
+
+  return row ? row.mode : null;
+}
+
+async function clearMode(env, chatId) {
+  await env.DB.prepare(`
+    INSERT INTO user_state(chat_id, mode, updated_at)
+    VALUES (?, NULL, ?)
+    ON CONFLICT(chat_id) DO UPDATE SET
+      mode = NULL,
+      updated_at = excluded.updated_at
+  `).bind(String(chatId), now()).run();
+}
+
 async function sendScreen(env, ctx, chatId, text, extraDeleteIds = []) {
   const state = await getUiState(env, chatId);
   const previousActive = state && state.active_message_id ? Number(state.active_message_id) : null;
@@ -401,29 +440,169 @@ function hasHome(p) {
   return p && typeof p.base_lat === "number" && typeof p.base_lon === "number";
 }
 
+function parsePointFromText(text) {
+  if (!text) return null;
+
+  const raw = text.trim();
+  const decoded = decodeURIComponent(raw);
+
+  try {
+    const url = new URL(decoded);
+
+    const host = url.hostname.toLowerCase();
+
+    if (host.includes("yandex")) {
+      const ll = url.searchParams.get("ll");
+      const pt = url.searchParams.get("pt");
+
+      for (const value of [pt, ll]) {
+        if (!value) continue;
+
+        const parts = value.split(/[,\s]+/).map(Number);
+        if (parts.length >= 2) {
+          const lon = parts[0];
+          const lat = parts[1];
+
+          if (isValidPoint(lat, lon)) {
+            return {
+              point: cleanPoint(lat, lon),
+              label: "Yandex Maps"
+            };
+          }
+        }
+      }
+    }
+
+    if (host.includes("openstreetmap")) {
+      const lat = Number(url.searchParams.get("mlat") || url.searchParams.get("lat"));
+      const lon = Number(url.searchParams.get("mlon") || url.searchParams.get("lon"));
+
+      if (isValidPoint(lat, lon)) {
+        return {
+          point: cleanPoint(lat, lon),
+          label: "OpenStreetMap"
+        };
+      }
+    }
+
+    const q = url.searchParams.get("q") || url.searchParams.get("query");
+    if (q) {
+      const m = q.match(/(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)/);
+      if (m) {
+        const lat = Number(m[1]);
+        const lon = Number(m[2]);
+
+        if (isValidPoint(lat, lon)) {
+          return {
+            point: cleanPoint(lat, lon),
+            label: "Google Maps"
+          };
+        }
+      }
+    }
+
+    const at = decoded.match(/@(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)/);
+    if (at) {
+      const lat = Number(at[1]);
+      const lon = Number(at[2]);
+
+      if (isValidPoint(lat, lon)) {
+        return {
+          point: cleanPoint(lat, lon),
+          label: "map link"
+        };
+      }
+    }
+  } catch {
+    // not URL
+  }
+
+  const coord = decoded.match(/(-?\d{1,2}(?:[.,]\d+)?)\s*[,; ]\s*(-?\d{1,3}(?:[.,]\d+)?)/);
+  if (coord) {
+    const lat = Number(coord[1].replace(",", "."));
+    const lon = Number(coord[2].replace(",", "."));
+
+    if (isValidPoint(lat, lon)) {
+      return {
+        point: cleanPoint(lat, lon),
+        label: "координаты"
+      };
+    }
+  }
+
+  return null;
+}
+
+async function geocodeAddress(query) {
+  const q = query.trim();
+
+  if (!q || q.length < 3 || q.length > 180) {
+    return null;
+  }
+
+  const enriched = /москва|moscow/i.test(q) ? q : "Москва, " + q;
+  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=ru&q=" + encodeURIComponent(enriched);
+
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "WanderOS Telegram bot / andreyobloff educational project",
+      "Accept": "application/json"
+    }
+  });
+
+  if (!res.ok) {
+    console.error("geocode failed", res.status, await res.text());
+    return null;
+  }
+
+  const data = await res.json();
+
+  if (!Array.isArray(data) || data.length === 0) {
+    return null;
+  }
+
+  const item = data[0];
+  const lat = Number(item.lat);
+  const lon = Number(item.lon);
+
+  if (!isValidPoint(lat, lon)) {
+    return null;
+  }
+
+  return {
+    point: cleanPoint(lat, lon),
+    label: item.display_name || enriched
+  };
+}
+
 function menuText() {
   return "<b>WanderOS</b>\n" +
     "<i>аномалия проявляется, когда маршрут выбран верно</i>\n\n" +
-    "⌂ <b>Штаб</b> — база операций\n" +
+    "⌂ <b>Штаб</b> — базовая точка операций\n" +
     "◌ <b>Сигнал</b> — метка рядом со штабом\n" +
     "⟡ <b>Выход</b> — путь до сигнала\n" +
     "☾ <b>Досье</b> — профиль оператора\n" +
     "‡ <b>Архив</b> — последние выходы";
 }
 
+function setHomeText() {
+  return "<b>⌂ Установка штаба</b>\n\n" +
+    "Отправь любую точку одним из способов:\n\n" +
+    "<code>55.7558, 37.6173</code>\n" +
+    "ссылку Google/Yandex/OSM\n" +
+    "адрес: <code>Тверская 13</code>\n\n" +
+    "С телефона также можно прикрепить геопозицию Telegram.";
+}
+
 function needHomeText() {
   return "<b>Штаб не установлен.</b>\n\n" +
-    "Открой ⌂ <b>Штаб</b> и прикрепи любую точку через геолокацию.";
+    "Открой ⌂ <b>Штаб</b> и отправь координаты, ссылку на карту или адрес.";
 }
 
-function setHomeText() {
-  return "<b>Установка штаба</b>\n\n" +
-    "Прикрепи геолокацию через вложение Telegram. Подойдёт текущая позиция, выбранная точка на карте, дом, вуз или другая база операций.";
-}
-
-function homeSavedText(target, route) {
-  return "<b>Штаб установлен.</b>\n\n" +
-    "Операции будут рассчитываться от этой точки.\n\n" +
+function homeSavedText(origin, target, route, label) {
+  return "<b>⌂ Штаб установлен.</b>\n\n" +
+    "<b>База:</b> <code>" + origin.lat + ", " + origin.lon + "</code>\n" +
+    "<b>Метка:</b> " + safeHtml(label || "штаб") + "\n\n" +
     "Первичный сигнал: <code>" + target.lat + ", " + target.lon + "</code>\n" +
     "<a href=\"" + urlHtml(route) + "\">Открыть путь</a>";
 }
@@ -507,6 +686,22 @@ function demoText() {
     "<a href=\"" + urlHtml(pointUrl(target)) + "\">открыть карту</a>";
 }
 
+async function saveHomeAndReply(env, ctx, chatId, origin, label, cleanupIds) {
+  const savedOrigin = await updateHome(env, chatId, origin.lat, origin.lon, label);
+
+  const p = await profile(env, chatId);
+  const radius = p.radius_m || DEFAULT_RADIUS;
+  const target = randomPoint(savedOrigin, radius);
+  const title = pick(TITLES);
+  const omen = pick(OMENS);
+  const saved = await addRoute(env, chatId, "home", savedOrigin, target, radius, title, omen);
+
+  await clearMode(env, chatId);
+  await logEvent(env, chatId, "home_saved", { origin: savedOrigin, target, label });
+
+  await sendScreen(env, ctx, chatId, homeSavedText(savedOrigin, target, saved.route, label), cleanupIds);
+}
+
 async function handleLocation(env, ctx, chatId, message, cleanupIds) {
   let label = "штаб";
 
@@ -517,22 +712,37 @@ async function handleLocation(env, ctx, chatId, message, cleanupIds) {
   const loc = message.location || message.venue?.location;
 
   if (!loc || typeof loc.latitude !== "number" || typeof loc.longitude !== "number") {
-    await logEvent(env, chatId, "location_missing", {});
-    await sendScreen(env, ctx, chatId, "<b>Штаб не принят.</b>\n\nПрикрепи точку через геолокацию Telegram.", cleanupIds);
+    await sendScreen(env, ctx, chatId, "<b>Штаб не принят.</b>\n\nОтправь координаты, ссылку на карту или адрес.", cleanupIds);
     return;
   }
 
-  const origin = await updateHome(env, chatId, loc.latitude, loc.longitude, label);
+  await saveHomeAndReply(
+    env,
+    ctx,
+    chatId,
+    cleanPoint(loc.latitude, loc.longitude),
+    label,
+    cleanupIds
+  );
+}
 
-  const p = await profile(env, chatId);
-  const radius = p.radius_m || DEFAULT_RADIUS;
-  const target = randomPoint(origin, radius);
-  const title = pick(TITLES);
-  const omen = pick(OMENS);
-  const saved = await addRoute(env, chatId, "home", origin, target, radius, title, omen);
+async function handleHomeText(env, ctx, chatId, text, cleanupIds) {
+  const parsed = parsePointFromText(text);
 
-  await logEvent(env, chatId, "home_saved", { origin, target });
-  await sendScreen(env, ctx, chatId, homeSavedText(target, saved.route), cleanupIds);
+  if (parsed) {
+    await saveHomeAndReply(env, ctx, chatId, parsed.point, parsed.label, cleanupIds);
+    return true;
+  }
+
+  const geocoded = await geocodeAddress(text);
+
+  if (geocoded) {
+    await saveHomeAndReply(env, ctx, chatId, geocoded.point, geocoded.label, cleanupIds);
+    return true;
+  }
+
+  await sendScreen(env, ctx, chatId, "<b>Штаб не найден.</b>\n\nОтправь координаты, ссылку на карту или более точный адрес.", cleanupIds);
+  return true;
 }
 
 async function makePoint(env, ctx, chatId, kind, cleanupIds) {
@@ -583,6 +793,7 @@ async function handleTelegram(request, env, ctx) {
     cleanupIds = cleanupIds.concat(known);
 
     await clearActiveMessage(env, chatId);
+    await clearMode(env, chatId);
     await sendScreen(env, ctx, chatId, menuText(), cleanupIds);
     return new Response("ok", { status: 200 });
   }
@@ -592,17 +803,27 @@ async function handleTelegram(request, env, ctx) {
     return new Response("ok", { status: 200 });
   }
 
+  const mode = await getMode(env, chatId);
+
+  if (mode === "await_home" && text && !cmd.startsWith("/")) {
+    await handleHomeText(env, ctx, chatId, text, cleanupIds);
+    return new Response("ok", { status: 200 });
+  }
+
   if (cmd === "/start" || cmd === "/menu" || cmd === "/help") {
+    await clearMode(env, chatId);
     await sendScreen(env, ctx, chatId, menuText(), cleanupIds);
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/sethome" || cmd === "/home" || cmd === "/location") {
+    await setMode(env, chatId, "await_home");
     await sendScreen(env, ctx, chatId, setHomeText(), cleanupIds);
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/profile") {
+    await clearMode(env, chatId);
     const p = await profile(env, chatId);
     const s = await stats(env, chatId);
     await sendScreen(env, ctx, chatId, profileText(p, s.total || 0), cleanupIds);
@@ -610,6 +831,7 @@ async function handleTelegram(request, env, ctx) {
   }
 
   if (cmd === "/radius") {
+    await clearMode(env, chatId);
     const r = parseRadius(text);
 
     if (!r) {
@@ -624,22 +846,26 @@ async function handleTelegram(request, env, ctx) {
   }
 
   if (cmd === "/point") {
+    await clearMode(env, chatId);
     await makePoint(env, ctx, chatId, "point", cleanupIds);
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/route") {
+    await clearMode(env, chatId);
     await makePoint(env, ctx, chatId, "route", cleanupIds);
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/history") {
+    await clearMode(env, chatId);
     const rows = await history(env, chatId);
     await sendScreen(env, ctx, chatId, historyText(rows), cleanupIds);
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/report") {
+    await clearMode(env, chatId);
     const p = await profile(env, chatId);
     const s = await stats(env, chatId);
     await sendScreen(env, ctx, chatId, reportText(p, s.total || 0), cleanupIds);
@@ -647,6 +873,8 @@ async function handleTelegram(request, env, ctx) {
   }
 
   if (cmd === "/clearhome") {
+    await clearMode(env, chatId);
+
     await env.DB.prepare(`
       UPDATE profiles
       SET base_lat = NULL, base_lon = NULL, base_label = NULL, updated_at = ?
@@ -659,7 +887,14 @@ async function handleTelegram(request, env, ctx) {
   }
 
   if (cmd === "/demo") {
+    await clearMode(env, chatId);
     await sendScreen(env, ctx, chatId, demoText(), cleanupIds);
+    return new Response("ok", { status: 200 });
+  }
+
+  const maybePoint = parsePointFromText(text);
+  if (maybePoint) {
+    await saveHomeAndReply(env, ctx, chatId, maybePoint.point, maybePoint.label, cleanupIds);
     return new Response("ok", { status: 200 });
   }
 
@@ -688,7 +923,7 @@ export default {
         status: "ok",
         runtime: "Cloudflare Workers",
         database: db,
-        ui: "send-message-cleanup-fixed"
+        ui: "desktop-friendly-home-input"
       });
     }
 
@@ -711,4 +946,3 @@ export default {
     return handleTelegram(request, env, ctx);
   }
 };
-
