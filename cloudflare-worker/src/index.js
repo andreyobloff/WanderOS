@@ -3,6 +3,9 @@ const DEFAULT_RADIUS = 1200;
 const MIN_RADIUS = 200;
 const MAX_RADIUS = 5000;
 
+const AUTO_PURGE_DEPTH = 35;
+const WIPE_DEPTH = 80;
+
 const TITLES = [
   "слепой двор",
   "ржавая арка",
@@ -156,7 +159,7 @@ async function tg(env, method, payload) {
 }
 
 async function deleteMessage(env, chatId, messageId) {
-  if (!messageId) return false;
+  if (!messageId || Number(messageId) <= 0) return false;
 
   try {
     const data = await tg(env, "deleteMessage", {
@@ -168,6 +171,17 @@ async function deleteMessage(env, chatId, messageId) {
   } catch (e) {
     console.error("deleteMessage exception", String(e));
     return false;
+  }
+}
+
+async function purgeRecent(env, chatId, currentMessageId, depth) {
+  if (!currentMessageId) return;
+
+  const from = Number(currentMessageId);
+  const limit = Math.max(1, from - depth);
+
+  for (let id = from; id >= limit; id--) {
+    await deleteMessage(env, chatId, id);
   }
 }
 
@@ -199,18 +213,27 @@ async function clearActiveMessage(env, chatId) {
   `).bind(String(chatId), now()).run();
 }
 
-async function deletePreviousScreen(env, chatId) {
+async function terminal(env, chatId, text) {
   const state = await getUiState(env, chatId);
 
   if (state && state.active_message_id) {
+    const edited = await tg(env, "editMessageText", {
+      chat_id: chatId,
+      message_id: Number(state.active_message_id),
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      reply_markup: mainKeyboard()
+    });
+
+    if (edited.ok === true) {
+      return;
+    }
+
     await deleteMessage(env, chatId, state.active_message_id);
   }
-}
 
-async function screen(env, chatId, text) {
-  await deletePreviousScreen(env, chatId);
-
-  const data = await tg(env, "sendMessage", {
+  const sent = await tg(env, "sendMessage", {
     chat_id: chatId,
     text,
     parse_mode: "HTML",
@@ -218,15 +241,9 @@ async function screen(env, chatId, text) {
     reply_markup: mainKeyboard()
   });
 
-  if (data.ok && data.result && data.result.message_id) {
-    await setActiveMessage(env, chatId, data.result.message_id);
+  if (sent.ok && sent.result && sent.result.message_id) {
+    await setActiveMessage(env, chatId, sent.result.message_id);
   }
-}
-
-async function cleanIncoming(env, message) {
-  if (!message || !message.chat || !message.message_id) return;
-
-  await deleteMessage(env, message.chat.id, message.message_id);
 }
 
 async function logEvent(env, chatId, type, payload) {
@@ -361,7 +378,8 @@ function menuText() {
     "◌ <b>Сигнал</b> — метка рядом со штабом\n" +
     "⟡ <b>Выход</b> — путь до сигнала\n" +
     "☾ <b>Досье</b> — профиль оператора\n" +
-    "‡ <b>Архив</b> — последние выходы";
+    "‡ <b>Архив</b> — последние выходы\n\n" +
+    "<i>Терминал показывает только актуальный экран.</i>";
 }
 
 function needHomeText() {
@@ -478,14 +496,14 @@ async function handleLocation(env, chatId, message) {
   const saved = await addRoute(env, chatId, "home", origin, target, radius, title, omen);
 
   await logEvent(env, chatId, "home_saved", { origin, target });
-  await screen(env, chatId, homeSavedText(target, saved.route));
+  await terminal(env, chatId, homeSavedText(target, saved.route));
 }
 
 async function makePoint(env, chatId, kind) {
   const p = await profile(env, chatId);
 
   if (!hasHome(p)) {
-    await screen(env, chatId, needHomeText());
+    await terminal(env, chatId, needHomeText());
     return;
   }
 
@@ -499,9 +517,9 @@ async function makePoint(env, chatId, kind) {
   await logEvent(env, chatId, kind, { target });
 
   if (kind === "route") {
-    await screen(env, chatId, routeText(target, saved.route, title, omen));
+    await terminal(env, chatId, routeText(target, saved.route, title, omen));
   } else {
-    await screen(env, chatId, pointText(target, saved.route, title, omen));
+    await terminal(env, chatId, pointText(target, saved.route, title, omen));
   }
 }
 
@@ -514,31 +532,41 @@ async function handleTelegram(request, env) {
   }
 
   const chatId = await upsertUser(env, message);
+  const cmd = commandOf(message);
+  const text = textOf(message);
 
-  await cleanIncoming(env, message);
+  if (cmd === "/wipe" || cmd === "/clean") {
+    await purgeRecent(env, chatId, message.message_id, WIPE_DEPTH);
+    const state = await getUiState(env, chatId);
+    if (state && state.active_message_id) {
+      await deleteMessage(env, chatId, state.active_message_id);
+    }
+    await clearActiveMessage(env, chatId);
+    await terminal(env, chatId, menuText());
+    return new Response("ok", { status: 200 });
+  }
+
+  await purgeRecent(env, chatId, message.message_id, AUTO_PURGE_DEPTH);
 
   if (message.location || message.venue) {
     await handleLocation(env, chatId, message);
     return new Response("ok", { status: 200 });
   }
 
-  const cmd = commandOf(message);
-  const text = textOf(message);
-
   if (cmd === "/start" || cmd === "/menu" || cmd === "/help") {
-    await screen(env, chatId, menuText());
+    await terminal(env, chatId, menuText());
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/sethome" || cmd === "/home" || cmd === "/location") {
-    await screen(env, chatId, setHomeText());
+    await terminal(env, chatId, setHomeText());
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/profile") {
     const p = await profile(env, chatId);
     const s = await stats(env, chatId);
-    await screen(env, chatId, profileText(p, s.total || 0));
+    await terminal(env, chatId, profileText(p, s.total || 0));
     return new Response("ok", { status: 200 });
   }
 
@@ -546,13 +574,13 @@ async function handleTelegram(request, env) {
     const r = parseRadius(text);
 
     if (!r) {
-      await screen(env, chatId, radiusHelpText());
+      await terminal(env, chatId, radiusHelpText());
       return new Response("ok", { status: 200 });
     }
 
     await updateRadius(env, chatId, r);
     await logEvent(env, chatId, "radius_changed", { radius: r });
-    await screen(env, chatId, "<b>Радиус изменён.</b>\n\nКруг поиска: <b>" + r + " м</b>.");
+    await terminal(env, chatId, "<b>Радиус изменён.</b>\n\nКруг поиска: <b>" + r + " м</b>.");
     return new Response("ok", { status: 200 });
   }
 
@@ -568,14 +596,14 @@ async function handleTelegram(request, env) {
 
   if (cmd === "/history") {
     const rows = await history(env, chatId);
-    await screen(env, chatId, historyText(rows));
+    await terminal(env, chatId, historyText(rows));
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/report") {
     const p = await profile(env, chatId);
     const s = await stats(env, chatId);
-    await screen(env, chatId, reportText(p, s.total || 0));
+    await terminal(env, chatId, reportText(p, s.total || 0));
     return new Response("ok", { status: 200 });
   }
 
@@ -587,26 +615,16 @@ async function handleTelegram(request, env) {
     `).bind(now(), String(chatId)).run();
 
     await logEvent(env, chatId, "home_cleared", {});
-    await screen(env, chatId, "<b>Штаб сброшен.</b>\n\nПривязка удалена.");
-    return new Response("ok", { status: 200 });
-  }
-
-  if (cmd === "/clean") {
-    const state = await getUiState(env, chatId);
-    if (state && state.active_message_id) {
-      await deleteMessage(env, chatId, state.active_message_id);
-    }
-    await clearActiveMessage(env, chatId);
-    await screen(env, chatId, menuText());
+    await terminal(env, chatId, "<b>Штаб сброшен.</b>\n\nПривязка удалена.");
     return new Response("ok", { status: 200 });
   }
 
   if (cmd === "/demo") {
-    await screen(env, chatId, demoText());
+    await terminal(env, chatId, demoText());
     return new Response("ok", { status: 200 });
   }
 
-  await screen(env, chatId, menuText());
+  await terminal(env, chatId, menuText());
   return new Response("ok", { status: 200 });
 }
 
@@ -631,7 +649,7 @@ export default {
         status: "ok",
         runtime: "Cloudflare Workers",
         database: db,
-        ui: "single-screen"
+        ui: "single-screen-aggressive-cleanup"
       });
     }
 
