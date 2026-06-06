@@ -1,5 +1,5 @@
-﻿name = "wanderos-bot"
-main = "src/index.js"
+name = "wanderos-bot"
+main = "src/index_ux_menu14a.js"
 compatibility_date = "2025-08-01"
 workers_dev = true
 
