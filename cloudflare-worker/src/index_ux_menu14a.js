@@ -1,4 +1,4 @@
-import priorWorker from "./index_cardfile13f.js";
+﻿import priorWorker from "./index_cardfile13f.js";
 
 const DEFAULT_CENTER = { lat: 55.7558, lon: 37.6173 };
 const DEFAULT_RADIUS = 1200;
@@ -58,11 +58,19 @@ const registered = p => Boolean(p && p.callsign);
 const ce = key => `<tg-emoji emoji-id="${CUSTOM_EMOJI[key]}">${FALLBACK_EMOJI[key]}</tg-emoji>`;
 const ik = rows => ({ inline_keyboard: rows });
 
+function label(key, text) {
+  const prefix = FALLBACK_EMOJI[key] ? `${FALLBACK_EMOJI[key]} ` : "";
+  const value = String(text || "");
+  return value.startsWith(prefix) ? value : `${prefix}${value}`;
+}
 function btn(key, text, extra = {}) {
-  return { text, icon_custom_emoji_id: CUSTOM_EMOJI[key], ...extra };
+  return { text: label(key, text), icon_custom_emoji_id: CUSTOM_EMOJI[key], ...extra };
 }
 function ib(key, text, callback_data, extra = {}) {
-  return { text, callback_data, icon_custom_emoji_id: CUSTOM_EMOJI[key], ...extra };
+  return { text: label(key, text), callback_data, icon_custom_emoji_id: CUSTOM_EMOJI[key], ...extra };
+}
+function urlButton(key, text, url, extra = {}) {
+  return { text: label(key, text), url, icon_custom_emoji_id: CUSTOM_EMOJI[key], ...extra };
 }
 function terminalButton() {
   return ib("TERMINAL", "Терминал", "ux:terminal");
@@ -76,7 +84,8 @@ function replyKeyboard() {
       [btn("SIGNAL", "Поймать сигнал")],
       [btn("HQ", "Штаб"), btn("PROFILE", "Досье")],
       [btn("CARDFILE", "Картотека"), btn("ARCHIVE", "Архив")],
-      [btn("OPERATORS", "Оперативники"), btn("HELP", "Помощь")]
+      [btn("OPERATORS", "Оперативники"), btn("HELP", "Помощь")],
+      [btn("TERMINAL", "Терминал")]
     ],
     resize_keyboard: true,
     is_persistent: true,
@@ -227,7 +236,7 @@ async function catchSignal(env, ctx, chatId, cleanup = []) {
   const route = await addRoute(env, chatId, origin, target, radius, title, omen);
   const d = dist(origin, target);
   const text = `${ce("SIGNAL")} <b>Сигнал пойман</b>\n\nWanderOS слушал город и нашёл точку рядом со штабом.\n\n<b>Сигнал:</b> ${esc(title)}\n<b>До точки:</b> примерно ${d} м\n<b>Координаты:</b> <code>${target.lat}, ${target.lon}</code>\n\n${esc(omen)}\n\nПосле прогулки откройте след и добавьте сводку: что увидели, что изменилось, что стоит проверить позже. След уже сохранён в архиве.`;
-  await sendScreen(env, ctx, chatId, text, cleanup, { inline: ik([[{ text: "Открыть маршрут", url: route.route, icon_custom_emoji_id: CUSTOM_EMOJI.SIGNAL }], [ib("ARCHIVE", "Открыть след", `tr:${route.id}:0`), ib("ARCHIVE", "Добавить сводку", `tn:${route.id}`)], [ib("SIGNAL", "Поймать другой", "ux:signal:catch")], [terminalButton(), helpButton()]]) });
+  await sendScreen(env, ctx, chatId, text, cleanup, { inline: ik([[urlButton("SIGNAL", "Открыть маршрут", route.route)], [ib("ARCHIVE", "Открыть след", `tr:${route.id}:0`), ib("ARCHIVE", "Добавить сводку", `tn:${route.id}`)], [ib("SIGNAL", "Поймать другой", "ux:signal:catch")], [terminalButton(), helpButton()]]) });
 }
 
 async function showHq(env, ctx, chatId, cleanup = []) {
@@ -377,3 +386,4 @@ export default {
     return priorWorker.fetch(request, env, ctx);
   }
 };
+

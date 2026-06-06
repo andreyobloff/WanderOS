@@ -1,4 +1,4 @@
-import priorWorker from "./index_cardfile13d.js";
+﻿import priorWorker from "./index_cardfile13d.js";
 
 const PAGE = 10;
 const now = () => new Date().toISOString();
@@ -155,7 +155,7 @@ async function listNotes(env, ctx, chatId, page=0, cleanup=[]){
 
 async function startResearchFromTrace(env, ctx, chatId, routeId){
   await flowSet(env,chatId,"cfe_res_title",{route_id:routeId});
-  await sendScreen(env,ctx,chatId,"<b>Новое исследование по следу</b>\n\nУкажи название исследования.",[],{inline:ik([[{text:"◀ След",callback_data:`cfe:trace:${routeId}:0`}])});
+  await sendScreen(env,ctx,chatId,"<b>Новое исследование по следу</b>\n\nУкажи название исследования.",[],{inline:ik([[{text:"◀ След",callback_data:`cfe:trace:${routeId}:0`}]])});
 }
 async function handleResearchFromTraceFlow(env, ctx, chatId, m, flow, cleanup){
   const text=msgText(m);
@@ -171,7 +171,7 @@ async function handleResearchFromTraceFlow(env, ctx, chatId, m, flow, cleanup){
     const value=parseValue(text); if(value===null){await sendScreen(env,ctx,chatId,"<b>Ценность не принята.</b>\n\nНужно число от 0 до 100.",cleanup);return true;}
     const id=uid(); await env.DB.prepare(`INSERT INTO researches(id,title,body,value_points,created_by_chat_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`).bind(id,flow.payload.title,flow.payload.body,value,String(chatId),now(),now()).run();
     await env.DB.prepare(`INSERT INTO research_links(id,research_id,link_type,link_id,position,created_at) VALUES(?,?,'trace',?,1,?)`).bind(uid(),id,flow.payload.route_id,now()).run();
-    await flowClear(env,chatId); await sendScreen(env,ctx,chatId,"<b>Исследование создано.</b>\n\nСлед автоматически добавлен как приложение.",cleanup,{inline:ik([[{text:"⌬ Карточка",callback_data:`cf:res:card:${id}:all:0`}],[{text:"‡ След",callback_data:`cfe:trace:${flow.payload.route_id}:0`}])}); return true;
+    await flowClear(env,chatId); await sendScreen(env,ctx,chatId,"<b>Исследование создано.</b>\n\nСлед автоматически добавлен как приложение.",cleanup,{inline:ik([[{text:"⌬ Карточка",callback_data:`cf:res:card:${id}:all:0`}],[{text:"‡ След",callback_data:`cfe:trace:${flow.payload.route_id}:0`}]])}); return true;
   }
   return false;
 }
@@ -222,3 +222,4 @@ export default {
     return priorWorker.fetch(request,env,ctx);
   }
 };
+
